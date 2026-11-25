@@ -1,0 +1,63 @@
+# Start everything:   docker compose up --build -d
+# Stop everything:    docker compose down          (add -v to also delete the database)
+#
+# 4 containers:  web (nginx + React)  ->  api (FastAPI)  ->  db (MySQL) + redis (cache)
+# Only "web" is reachable from outside; the others talk over a private Docker network.
+
+services:
+  db:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Copy .env.example to .env first}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-snip}
+      MYSQL_USER: ${MYSQL_USER:-snip}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Copy .env.example to .env first}
+    volumes:
+      - mysql_data:/var/lib/mysql      # data survives container restarts
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # It is only a cache, so no need to save it to disk
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      MYSQL_HOST: db                   # the service name IS the hostname inside Docker
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-snip}
+      MYSQL_USER: ${MYSQL_USER:-snip}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Copy .env.example to .env first}
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: ${SECRET_KEY:?Copy .env.example to .env first}
+      BASE_URL: ${BASE_URL:-http://localhost:8080}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  web:
+    build: ./frontend
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  mysql_data:
